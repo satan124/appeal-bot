@@ -96,7 +96,7 @@ def appeal_action(call):
         bot.send_message(uid, "❌ Your appeal has been rejected.")
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
 
-# ================= REPORT SYSTEM (FIXED) =================
+# ================= REPORT SYSTEM =================
 
 @bot.message_handler(commands=["report"])
 def report(message):
@@ -106,7 +106,6 @@ def report(message):
 
     reported = message.reply_to_message
 
-    # forward reported message
     bot.forward_message(
         OWNER_ID,
         reported.chat.id,
@@ -124,7 +123,7 @@ def report(message):
 
     bot.reply_to(message, "✅ Report sent.")
 
-# ================= ANTI LINK / WARN =================
+# ================= ANTI LINK + WARN (DELETE MESSAGE) =================
 
 @bot.message_handler(func=lambda m: m.text and re.search(LINK_REGEX, m.text))
 def warn_link(message):
@@ -134,6 +133,12 @@ def warn_link(message):
             return
     except:
         return
+
+    # DELETE LINK MESSAGE
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+    except:
+        pass
 
     uid = message.from_user.id
     warns[uid] = warns.get(uid, 0) + 1
@@ -153,8 +158,8 @@ def warn_link(message):
         )
         warns[uid] = 0
     else:
-        bot.reply_to(
-            message,
+        bot.send_message(
+            message.chat.id,
             f"🚫 Links sending is not allowed\n⚠️ Warning {warns[uid]}/4",
             reply_markup=kb
         )
