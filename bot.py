@@ -36,8 +36,8 @@ def has_link(text):
 def start(message):
     kb = InlineKeyboardMarkup()
     kb.add(
-        InlineKeyboardButton("CHAT GC", callback_data="appeal_CHAT_GC"),
-        InlineKeyboardButton("Buy & Sell", callback_data="appeal_BUY_SELL")
+        InlineKeyboardButton("CHAT GC", callback_data="group_CHAT_GC"),
+        InlineKeyboardButton("Buy & Sell", callback_data="group_BUY_SELL")
     )
     bot.send_message(
         message.chat.id,
@@ -56,13 +56,32 @@ def cancel_btn(call):
     user_state.pop(call.from_user.id, None)
     bot.send_message(call.message.chat.id, "Appeal canceled.")
 
-# ---------- APPEAL GROUP ----------
-@bot.callback_query_handler(func=lambda c: c.data.startswith("appeal_"))
-def appeal_group(call):
-    grp = call.data.replace("appeal_", "")
-    user_state[call.from_user.id] = {"type": "appeal", "group": grp}
+# ---------- GROUP SELECT ----------
+@bot.callback_query_handler(func=lambda c: c.data.startswith("group_"))
+def group_selected(call):
+    grp = call.data.replace("group_", "")
+    user_state[call.from_user.id] = {"group": grp}
 
-    bot.send_message(call.message.chat.id, "You are not muted or banned.")
+    kb = InlineKeyboardMarkup()
+    kb.add(
+        InlineKeyboardButton("🔇 Muted", callback_data="status_muted"),
+        InlineKeyboardButton("⛔ Banned", callback_data="status_banned"),
+    )
+    kb.add(InlineKeyboardButton("❌ Cancel", callback_data="cancel"))
+
+    bot.send_message(
+        call.message.chat.id,
+        "You are muted or banned.",
+        reply_markup=kb
+    )
+
+# ---------- STATUS SELECT ----------
+@bot.callback_query_handler(func=lambda c: c.data.startswith("status_"))
+def status_selected(call):
+    if call.from_user.id not in user_state:
+        return
+
+    user_state[call.from_user.id]["type"] = "appeal"
 
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("❌ Cancel", callback_data="cancel"))
