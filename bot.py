@@ -11,12 +11,14 @@ AUTO_MUTE_SECONDS = 24 * 60 * 60
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-db = sqlite3.connect("data.db", check_same_thread=False)
+db = sqlite3.connect("bot.db", check_same_thread=False)
 cur = db.cursor()
 
 cur.execute("CREATE TABLE IF NOT EXISTS warnings (user_id INTEGER, chat_id INTEGER, count INTEGER)")
 cur.execute("CREATE TABLE IF NOT EXISTS appeals (user_id INTEGER, group_name TEXT, reason TEXT, time TEXT)")
 db.commit()
+
+# ---------- HELPERS ----------
 
 def is_admin(chat_id, user_id):
     try:
@@ -26,9 +28,10 @@ def is_admin(chat_id, user_id):
         return False
 
 def has_link(text):
-    return bool(re.search(r"(https?://|t\.me/|telegram\.me/)", text))
+    return bool(re.search(r"(https?://|t\.me/|telegram\.me/)", text or ""))
 
-# /start
+# ---------- START ----------
+
 @bot.message_handler(commands=["start"])
 def start(message):
     kb = InlineKeyboardMarkup()
@@ -42,16 +45,35 @@ def start(message):
         reply_markup=kb
     )
 
-# Appeal group select
+# ---------- CANCEL COMMAND ----------
+
+@bot.message_handler(commands=["cancel"])
+def cancel_cmd(message):
+    bot.send_message(message.chat.id, "❌ Appeal canceled.")
+
+# ---------- APPEAL FLOW ----------
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("appeal_"))
 def appeal_group(call):
     group = call.data.replace("appeal_", "")
-    msg = bot.send_message(call.message.chat.id, "Share your appeal reason:")
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("❌ Cancel", callback_data="cancel_appeal"))
+
+    msg = bot.send_message(
+        call.message.chat.id,
+        "Share your appeal reason:",
+        reply_markup=kb
+    )
     bot.register_next_step_handler(msg, save_appeal, group)
 
+@bot.callback_query_handler(func=lambda c: c.data == "cancel_appeal")
+def cancel_appeal(call):
+    bot.send_message(call.message.chat.id, "❌ Appeal canceled.")
+
 def save_appeal(message, group):
-    if message.text.lower() == "cancel":
-        bot.send_message(message.chat.id, "Appeal canceled.")
+    if message.text.startswith("/cancel"):
+        bot.send_message(message.chat.id, "❌ Appeal canceled.")
         return
 
     cur.execute(
@@ -71,7 +93,8 @@ def save_appeal(message, group):
         f"📝 {message.text}"
     )
 
-# /report (reply only)
+# ---------- REPORT SYSTEM ----------
+
 @bot.message_handler(commands=["report"])
 def report(message):
     if not message.reply_to_message:
@@ -91,11 +114,12 @@ def report(message):
         f"🚨 <b>REPORT</b>\n"
         f"Reporter: @{message.from_user.username}\n"
         f"ID: {message.from_user.id}\n"
-        f"Chat: {message.chat.title}"
+        f"Group: {message.chat.title}"
     )
 
-# Anti-link system
-@bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"] and has_link(m.text or ""))
+# ---------- ANTI LINK / WARN SYSTEM ----------
+
+@bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"] and has_link(m.text))
 def warn_link(message):
     if is_admin(message.chat.id, message.from_user.id):
         return
@@ -121,11 +145,11 @@ def warn_link(message):
                 until_date=datetime.now() + timedelta(seconds=AUTO_MUTE_SECONDS),
                 can_send_messages=False
             )
-            bot.reply_to(message, "🔇 Muted for 24 hours (4 warnings).")
+            bot.reply_to(message, "🔇 You have been muted for 24 hours (4 warnings).")
         except:
             pass
     else:
-        bot.reply_to(message, f"⚠️ Warning {count}/{MAX_WARNINGS}: Links not allowed.")
+        bot.reply_to(message, f"⚠️ Warning {count}/{MAX_WARNINGS}: Links are not allowed.")
 
 print("Bot is running...")
 bot.infinity_polling()
