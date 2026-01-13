@@ -1,181 +1,131 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sqlite3
-import re
 from datetime import datetime, timedelta
+import re
 
 BOT_TOKEN = "8389345826:AAH2yz5RrvOwvtQoW2ROG9E3-_ti7lKekMg"
 OWNER_ID = 8286004637
-
-AUTO_MUTE_SECONDS = 24 * 60 * 60  # 24 hours
 MAX_WARNINGS = 4
+AUTO_MUTE_SECONDS = 24 * 60 * 60
 
-bot = telebot.TeleBot(BOT_TOKEN)
-bot.remove_webhook()
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# ================= DATABASE =================
 db = sqlite3.connect("data.db", check_same_thread=False)
 cur = db.cursor()
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS appeals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    username TEXT,
-    appeal_type TEXT,
-    reason TEXT,
-    status TEXT,
-    time TEXT
-)
-""")
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS warnings (
-    user_id INTEGER PRIMARY KEY,
-    count INTEGER
-)
-""")
-
+cur.execute("CREATE TABLE IF NOT EXISTS warnings (user_id INTEGER, chat_id INTEGER, count INTEGER)")
+cur.execute("CREATE TABLE IF NOT EXISTS appeals (user_id INTEGER, group_name TEXT, reason TEXT, time TEXT)")
 db.commit()
 
-# ================= UTIL =================
-def is_link(text):
-    return bool(re.search(r"(http|https|t\.me)", text.lower()))
+def is_admin(chat_id, user_id):
+    try:
+        m = bot.get_chat_member(chat_id, user_id)
+        return m.status in ["administrator", "creator"]
+    except:
+        return False
 
-# ================= APPEAL =================
-@bot.message_handler(commands=["appeal"])
-def appeal_start(message):
-    kb = InlineKeyboardMarkup()
-    for t in ["Muted", "Warned", "Banned", "Other"]:
-        kb.add(InlineKeyboardButton(t, callback_data=f"appeal:{t}"))
-    bot.send_message(message.chat.id, "Choose appeal type:", reply_markup=kb)
+def has_link(text):
+    return bool(re.search(r"(https?://|t\.me/|telegram\.me/)", text))
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("appeal:"))
-def appeal_type(call):
-    appeal_type = call.data.split(":")[1]
-    bot.send_message(call.message.chat.id, "Send appeal reason:")
-    bot.register_next_step_handler(call.message, save_appeal, appeal_type)
-
-def save_appeal(message, appeal_type):
-    cur.execute(
-        "INSERT INTO appeals VALUES (NULL,?,?,?,?,?,?)",
-        (
-            message.from_user.id,
-            message.from_user.username,
-            appeal_type,
-            message.text,
-            "Pending",
-            datetime.now().strftime("%d-%m-%Y %H:%M")
-        )
-    )
-    db.commit()
-    appeal_id = cur.lastrowid
-
+# /start
+@bot.message_handler(commands=["start"])
+def start(message):
     kb = InlineKeyboardMarkup()
     kb.add(
-        InlineKeyboardButton("✅ Approve", callback_data=f"approve:{appeal_id}"),
-        InlineKeyboardButton("❌ Reject", callback_data=f"reject:{appeal_id}")
+        InlineKeyboardButton("CHAT GC", callback_data="appeal_CHAT_GC"),
+        InlineKeyboardButton("Buy & Sell", callback_data="appeal_BUY_SELL")
     )
-
     bot.send_message(
-        OWNER_ID,
-        f"📩 NEW APPEAL\n\n"
-        f"ID: {appeal_id}\n"
-        f"User: @{message.from_user.username}\n"
-        f"User ID: {message.from_user.id}\n"
-        f"Type: {appeal_type}\n\n"
-        f"Reason:\n{message.text}",
+        message.chat.id,
+        "Welcome! Choose a group to start your appeal.",
         reply_markup=kb
     )
 
-    bot.send_message(message.chat.id, "✅ Appeal submitted. Please wait.")
+# Appeal group select
+@bot.callback_query_handler(func=lambda c: c.data.startswith("appeal_"))
+def appeal_group(call):
+    group = call.data.replace("appeal_", "")
+    msg = bot.send_message(call.message.chat.id, "Share your appeal reason:")
+    bot.register_next_step_handler(msg, save_appeal, group)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("approve:"))
-def approve(call):
-    appeal_id = int(call.data.split(":")[1])
-    cur.execute("SELECT user_id, appeal_type FROM appeals WHERE id=?", (appeal_id,))
-    row = cur.fetchone()
-
-    if not row:
+def save_appeal(message, group):
+    if message.text.lower() == "cancel":
+        bot.send_message(message.chat.id, "Appeal canceled.")
         return
 
-    user_id, appeal_type = row
-
-    if appeal_type == "Muted":
-        try:
-            bot.restrict_chat_member(call.message.chat.id, user_id, until_date=0, can_send_messages=True)
-        except:
-            pass
-
-    cur.execute("UPDATE appeals SET status='Approved' WHERE id=?", (appeal_id,))
+    cur.execute(
+        "INSERT INTO appeals VALUES (?,?,?,?)",
+        (message.from_user.id, group, message.text, str(datetime.now()))
+    )
     db.commit()
 
-    bot.send_message(user_id, "✅ Your appeal has been APPROVED.")
-    bot.edit_message_text(f"✅ Appeal {appeal_id} approved.", call.message.chat.id, call.message.message_id)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("reject:"))
-def reject(call):
-    appeal_id = int(call.data.split(":")[1])
-    cur.execute("SELECT user_id FROM appeals WHERE id=?", (appeal_id,))
-    row = cur.fetchone()
-
-    if not row:
-        return
-
-    user_id = row[0]
-    cur.execute("UPDATE appeals SET status='Rejected' WHERE id=?", (appeal_id,))
-    db.commit()
-
-    bot.send_message(user_id, "❌ Your appeal has been REJECTED.")
-    bot.edit_message_text(f"❌ Appeal {appeal_id} rejected.", call.message.chat.id, call.message.message_id)
-
-# ================= REPORT SYSTEM =================
-@bot.message_handler(commands=["report"])
-def report(message):
-    if not message.reply_to_message:
-        bot.reply_to(message, "Reply to the message you want to report.")
-        return
-
-    offender = message.reply_to_message.from_user
-    bot.forward_message(OWNER_ID, message.chat.id, message.reply_to_message.message_id)
+    bot.send_message(message.chat.id, "✅ Appeal submitted.")
 
     bot.send_message(
         OWNER_ID,
-        f"🚨 MESSAGE REPORTED\n\n"
-        f"Group: {message.chat.title}\n"
-        f"Offender: @{offender.username}\n"
-        f"User ID: {offender.id}\n"
-        f"Reported by: @{message.from_user.username}"
+        f"📢 <b>NEW APPEAL</b>\n"
+        f"👤 {message.from_user.first_name}\n"
+        f"🆔 {message.from_user.id}\n"
+        f"📍 Group: {group}\n"
+        f"📝 {message.text}"
     )
 
-    bot.reply_to(message, "✅ Report sent to admin.")
+# /report (reply only)
+@bot.message_handler(commands=["report"])
+def report(message):
+    if not message.reply_to_message:
+        bot.reply_to(message, "Reply to a message to report it.")
+        return
 
-# ================= LINK WARNING =================
-@bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"] and is_link(m.text or ""))
+    bot.send_message(message.chat.id, "✅ Report sent.")
+
+    bot.forward_message(
+        OWNER_ID,
+        message.chat.id,
+        message.reply_to_message.message_id
+    )
+
+    bot.send_message(
+        OWNER_ID,
+        f"🚨 <b>REPORT</b>\n"
+        f"Reporter: @{message.from_user.username}\n"
+        f"ID: {message.from_user.id}\n"
+        f"Chat: {message.chat.title}"
+    )
+
+# Anti-link system
+@bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"] and has_link(m.text or ""))
 def warn_link(message):
-    user_id = message.from_user.id
+    if is_admin(message.chat.id, message.from_user.id):
+        return
 
-    cur.execute("SELECT count FROM warnings WHERE user_id=?", (user_id,))
+    cur.execute(
+        "SELECT count FROM warnings WHERE user_id=? AND chat_id=?",
+        (message.from_user.id, message.chat.id)
+    )
     row = cur.fetchone()
-
     count = row[0] + 1 if row else 1
 
-    cur.execute("REPLACE INTO warnings VALUES (?,?)", (user_id, count))
+    cur.execute(
+        "REPLACE INTO warnings VALUES (?,?,?)",
+        (message.from_user.id, message.chat.id, count)
+    )
     db.commit()
 
     if count >= MAX_WARNINGS:
         try:
             bot.restrict_chat_member(
                 message.chat.id,
-                user_id,
+                message.from_user.id,
                 until_date=datetime.now() + timedelta(seconds=AUTO_MUTE_SECONDS),
                 can_send_messages=False
             )
+            bot.reply_to(message, "🔇 Muted for 24 hours (4 warnings).")
         except:
             pass
-
-        bot.reply_to(message, "🔇 You have been muted for 24 hours (4 warnings).")
     else:
-        bot.reply_to(message, f"⚠️ Warning {count}/{MAX_WARNINGS}: Links are not allowed.")
+        bot.reply_to(message, f"⚠️ Warning {count}/{MAX_WARNINGS}: Links not allowed.")
 
+print("Bot is running...")
 bot.infinity_polling()
